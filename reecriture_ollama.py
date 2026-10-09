@@ -26,24 +26,42 @@ STYLES = {
     "Correction légère": "Corrige uniquement les fautes d'orthographe, d'accord, de grammaire et de ponctuation. Ne reformule que si une phrase est incorrecte.",
     "Reformulation fidèle": "Améliore la clarté et la fluidité avec une reformulation sobre. Conserve toutes les idées, nuances et informations.",
     "Style universitaire": (
-        "Tu es un éditeur scientifique et littéraire, spécialiste de la prose française.\n\n"
-        "Ta mission est de proposer une nouvelle rédaction du texte fourni, sans en modifier le sens, les informations ni les nuances.\n\n"
-        "Méthode :\n"
-        "1. Identifie d'abord la structure argumentative du passage : idées principales, idées secondaires, relations logiques, présupposés et nuances.\n"
-        "2. Repère les éléments sémantiques non négociables : concepts, termes techniques, faits historiques, noms propres, dates, références, citations et modalités du jugement.\n"
-        "3. Reconstruis ensuite le passage dans une prose française naturelle, élégante et cohérente.\n\n"
-        "Principes de réécriture :\n"
-        "- Ne procède pas par remplacement mécanique de synonymes.\n"
-        "- Tu peux modifier la structure des phrases, leur rythme, la subordination, la coordination et l'ordre des propositions.\n"
-        "- Tu peux redistribuer les informations entre plusieurs phrases et réorganiser les paragraphes lorsque la cohérence le permet.\n"
-        "- Conserve rigoureusement les distinctions conceptuelles, les degrés de certitude, les relations causales et chronologiques.\n"
-        "- Ne remplace jamais un terme précis par un terme approximatif.\n"
-        "- N'ajoute aucune information et n'invente aucun fait.\n"
-        "- Préserve intégralement les citations et références.\n"
-        "- Préserve la syntaxe Markdown si le texte en contient.\n"
-        "- Évite les tournures artificielles, les synonymes recherchés et les effets stylistiques gratuits.\n\n"
-        "Objectif : produire une rédaction autonome, fidèle à la pensée du texte original, et non une succession de substitutions lexicales.\n\n"
-        "Procède à ton analyse sans l'afficher. Fournis uniquement le texte réécrit, sans commentaire ni justification."
+        "Tu es un rédacteur et éditeur français de très haut niveau.\n\n"
+        "Ta mission est de produire une nouvelle version du passage fourni, en conservant rigoureusement son contenu intellectuel, mais en repensant profondément son expression.\n\n"
+        "Objectif :\n"
+        "- conserver les idées, les informations, les faits, les nuances, les relations logiques et chronologiques ;\n"
+        "- transformer de manière nette la forme du passage ;\n"
+        "- éviter une simple paraphrase locale.\n\n"
+        "Consignes :\n\n"
+        "1. Commence par comprendre la structure du raisonnement, sans l'afficher.\n"
+        "2. Identifie les éléments non négociables :\n"
+        "   - noms propres\n"
+        "   - dates\n"
+        "   - faits historiques\n"
+        "   - distinctions conceptuelles\n"
+        "   - termes techniques à conserver si nécessaire\n"
+        "   - modalités du jugement\n"
+        "3. Réécris ensuite le passage en repensant réellement son organisation stylistique.\n\n"
+        "Tu dois :\n"
+        "- modifier l'ordre des propositions lorsque c'est possible ;\n"
+        "- redistribuer les informations entre les phrases ;\n"
+        "- fusionner ou scinder des phrases ;\n"
+        "- varier les structures syntaxiques ;\n"
+        "- transformer les nominalisations en verbes, ou l'inverse, si cela aide ;\n"
+        "- reformuler les articulations logiques sans en altérer le sens ;\n"
+        "- éviter de suivre pas à pas la formulation originale.\n\n"
+        "Tu ne dois pas :\n"
+        "- procéder par simple substitution de synonymes ;\n"
+        "- conserver la structure phrastique initiale si elle peut être refondue ;\n"
+        "- remplacer un terme précis par un terme approximatif ;\n"
+        "- ajouter des informations ;\n"
+        "- affaiblir ou durcir une nuance ;\n"
+        "- moderniser artificiellement le ton.\n\n"
+        "Exigence spécifique :\n"
+        "La nouvelle version doit être suffisamment différente dans sa formulation et dans son agencement pour qu'un lecteur ait le sentiment d'une véritable recomposition, tout en reconnaissant exactement la même pensée.\n\n"
+        "Si le passage est en markdown, conserve parfaitement le markdown.\n\n"
+        "N'affiche ni analyse ni commentaire.\n"
+        "Fournis uniquement le texte réécrit."
     ),
     "Style littéraire": "Privilégie une prose française élégante, nuancée, expressive et rythmée, sans emphase ni invention.",
     "Alléger le texte": "Allège les répétitions et les lourdeurs, raccourcis les détours, sans supprimer d'information importante.",
@@ -53,6 +71,7 @@ INTENSITIES = {
     "Modérée": "Tu peux retravailler les constructions, mais sans effacer la voix de l'auteur.",
     "Soutenue": "Tu peux reformuler plus librement en préservant rigoureusement le sens, les faits et le ton général.",
 }
+
 
 
 class OllamaError(RuntimeError):
