@@ -339,8 +339,12 @@ def structural_signature(text: str) -> list[str]:
     return [m.group(1) for line in text.splitlines() if (m := MARKER.match(line))]
 
 
+DEFAULT_OLLAMA_OPTIONS = {"temperature": 0.25, "top_p": 0.9, "repeat_penalty": 1.1, "num_predict": 4096}
+
+
 def rewrite_markdown_group(model: str, segments: list[Segment], indices: list[int],
-                           style: str, intensity: str, cancelled: threading.Event) -> tuple[list[str], list[str]]:
+                           style: str, intensity: str, cancelled: threading.Event,
+                           ollama_options: dict | None = None) -> tuple[list[str], list[str]]:
     masked = []
     protections = []
     for i in indices:
@@ -368,7 +372,7 @@ def rewrite_markdown_group(model: str, segments: list[Segment], indices: list[in
             "required": ["fragments"],
             "additionalProperties": False,
         },
-        "options": {"temperature": 0.2, "num_ctx": 8192, "num_predict": 4096},
+        "options": {**DEFAULT_OLLAMA_OPTIONS, **(ollama_options or {}), "num_ctx": 8192},
     }
     if cancelled.is_set():
         raise Cancelled()
@@ -407,7 +411,7 @@ def rewrite_markdown_group(model: str, segments: list[Segment], indices: list[in
 
 
 def rewrite_plain_stream(model: str, content: str, style: str, intensity: str,
-                         cancelled: threading.Event):
+                         cancelled: threading.Event, ollama_options: dict | None = None):
     payload = {
         "model": model,
         "messages": [
@@ -416,7 +420,7 @@ def rewrite_plain_stream(model: str, content: str, style: str, intensity: str,
         ],
         "think": False,
         "stream": True,
-        "options": {"temperature": 0.25, "num_ctx": 8192, "num_predict": 8192},
+        "options": {**DEFAULT_OLLAMA_OPTIONS, **(ollama_options or {}), "num_ctx": 8192},
     }
     for item in api_stream("/api/chat", payload, cancelled):
         chunk = item.get("message", {}).get("content", "")
@@ -456,6 +460,10 @@ class RewriteApp(tk.Tk):
         self.model = tk.StringVar()
         self.style = tk.StringVar(value="Reformulation fidèle")
         self.intensity = tk.StringVar(value="Modérée")
+        self.temperature = tk.StringVar(value=str(DEFAULT_OLLAMA_OPTIONS["temperature"]))
+        self.top_p = tk.StringVar(value=str(DEFAULT_OLLAMA_OPTIONS["top_p"]))
+        self.repeat_penalty = tk.StringVar(value=str(DEFAULT_OLLAMA_OPTIONS["repeat_penalty"]))
+        self.num_predict = tk.StringVar(value=str(DEFAULT_OLLAMA_OPTIONS["num_predict"]))
         self.download_model = tk.StringVar(value="qwen3:14b")
         self.source_path = tk.StringVar()
         self.target_path = tk.StringVar()
@@ -488,6 +496,19 @@ class RewriteApp(tk.Tk):
         self.download_combo.grid(row=1, column=3, sticky="ew", padx=6)
         self.pull_btn = ttk.Button(opts, text="Télécharger", command=self.pull_model)
         self.pull_btn.grid(row=1, column=4, padx=(3, 10))
+
+        ttk.Label(opts, text="Température :").grid(row=2, column=0, padx=(10, 5), pady=8, sticky="w")
+        ttk.Spinbox(opts, textvariable=self.temperature, from_=0.0, to=2.0, increment=0.05,
+                   width=6, justify="center").grid(row=2, column=1, sticky="w")
+        ttk.Label(opts, text="top_p :").grid(row=2, column=2, padx=6, sticky="e")
+        ttk.Spinbox(opts, textvariable=self.top_p, from_=0.0, to=1.0, increment=0.05,
+                   width=6, justify="center").grid(row=2, column=3, sticky="w", padx=6)
+        ttk.Label(opts, text="repeat_penalty :").grid(row=3, column=0, padx=(10, 5), pady=8, sticky="w")
+        ttk.Spinbox(opts, textvariable=self.repeat_penalty, from_=0.5, to=2.0, increment=0.05,
+                   width=6, justify="center").grid(row=3, column=1, sticky="w")
+        ttk.Label(opts, text="num_predict :").grid(row=3, column=2, padx=6, sticky="e")
+        ttk.Spinbox(opts, textvariable=self.num_predict, from_=256, to=16384, increment=256,
+                   width=7, justify="center").grid(row=3, column=3, sticky="w", padx=6)
 
         self.tabs = ttk.Notebook(self)
         self.tabs.grid(row=1, column=0, sticky="nsew", padx=12, pady=5)
@@ -803,9 +824,31 @@ class RewriteApp(tk.Tk):
             return None
         return name
 
+    def _read_ollama_options(self) -> dict | None:
+        try:
+            temperature = float(self.temperature.get())
+            top_p = float(self.top_p.get())
+            repeat_penalty = float(self.repeat_penalty.get())
+            num_predict = int(float(self.num_predict.get()))
+            if not (0.0 <= temperature <= 2.0):
+                raise ValueError("température hors de [0, 2]")
+            if not (0.0 <= top_p <= 1.0):
+                raise ValueError("top_p hors de [0, 1]")
+            if not (0.1 <= repeat_penalty <= 3.0):
+                raise ValueError("repeat_penalty hors de [0.1, 3]")
+            if not (1 <= num_predict <= 32768):
+                raise ValueError("num_predict hors de [1, 32768]")
+        except ValueError as exc:
+            messagebox.showerror("Paramètres Ollama invalides", f"Vérifie température, top_p, repeat_penalty et num_predict ({exc}).")
+            return None
+        return {"temperature": temperature, "top_p": top_p, "repeat_penalty": repeat_penalty, "num_predict": num_predict}
+
     def rewrite_text(self):
         model = self._selected_model()
         if not model:
+            return
+        options = self._read_ollama_options()
+        if options is None:
             return
         source = self.text_input.get("1.0", "end-1c")
         if not source.strip():
@@ -814,9 +857,9 @@ class RewriteApp(tk.Tk):
         self.text_output.delete("1.0", "end")
         self.progress.configure(mode="indeterminate")
         self.progress.start(12)
-        self._run(self._text_worker, model, source, self.style.get(), self.intensity.get())
+        self._run(self._text_worker, model, source, self.style.get(), self.intensity.get(), options)
 
-    def _text_worker(self, model, source, style, intensity):
+    def _text_worker(self, model, source, style, intensity, options):
         self.jobs.put(("status", f"Réécriture en cours avec {model}…"))
         # Traite également les longs collages sans déborder la fenêtre de contexte.
         for number, part in enumerate(split_long_piece(source, cap=9000)):
@@ -824,7 +867,7 @@ class RewriteApp(tk.Tk):
                 raise Cancelled()
             if number:
                 self.jobs.put(("text_chunk", "\n\n"))
-            for delta in rewrite_plain_stream(model, part, style, intensity, self.cancel_event):
+            for delta in rewrite_plain_stream(model, part, style, intensity, self.cancel_event, options):
                 self.jobs.put(("text_chunk", delta))
         self.jobs.put(("text_finish", None))
 
@@ -866,6 +909,9 @@ class RewriteApp(tk.Tk):
         model = self._selected_model()
         if not model:
             return
+        options = self._read_ollama_options()
+        if options is None:
+            return
         source = Path(self.source_path.get())
         target_str = self.target_path.get().strip()
         if not source.is_file() or not target_str:
@@ -884,9 +930,9 @@ class RewriteApp(tk.Tk):
             return
         self._preview_source(contents)
         self.progress.configure(mode="determinate", value=0)
-        self._run(self._file_worker, model, contents, target, self.style.get(), self.intensity.get())
+        self._run(self._file_worker, model, contents, target, self.style.get(), self.intensity.get(), options)
 
-    def _file_worker(self, model: str, contents: str, target: Path, style: str, intensity: str):
+    def _file_worker(self, model: str, contents: str, target: Path, style: str, intensity: str, options: dict):
         newline = "\r\n" if contents.count("\r\n") > contents.count("\n") // 2 else "\n"
         contents = contents.replace("\r\n", "\n").replace("\r", "\n")
         segments = prepare_segments(contents)
@@ -897,7 +943,7 @@ class RewriteApp(tk.Tk):
                 raise Cancelled()
             self.jobs.put(("status", f"{model} — groupe {number}/{len(groups)} ({len(indices)} fragments)…"))
             try:
-                generated, alerts = rewrite_markdown_group(model, segments, indices, style, intensity, self.cancel_event)
+                generated, alerts = rewrite_markdown_group(model, segments, indices, style, intensity, self.cancel_event, options)
             except ValueError as exc:
                 warnings.append(f"Groupe {number} conservé ({exc}).")
                 generated = [segments[idx].text for idx in indices]
