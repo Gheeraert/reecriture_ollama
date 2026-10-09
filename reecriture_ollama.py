@@ -15,6 +15,8 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from urllib import error, request
 
+from text_diff import DiffOp, DiffStats, compute_diff
+
 OLLAMA_URL = "http://127.0.0.1:11434"
 RECOMMENDED_MODELS = ("qwen3:14b", "gemma3:12b", "qwen3:8b")
 MAX_GROUP_CHARS = 3200
@@ -23,7 +25,26 @@ MAX_GROUP_PARAGRAPHS = 8
 STYLES = {
     "Correction légère": "Corrige uniquement les fautes d'orthographe, d'accord, de grammaire et de ponctuation. Ne reformule que si une phrase est incorrecte.",
     "Reformulation fidèle": "Améliore la clarté et la fluidité avec une reformulation sobre. Conserve toutes les idées, nuances et informations.",
-    "Style universitaire": "Réécris dans un français académique clair, précis, élégant et naturel, sans lourdeur ni jargon inutile.",
+    "Style universitaire": (
+        "Tu es un éditeur scientifique et littéraire, spécialiste de la prose française.\n\n"
+        "Ta mission est de proposer une nouvelle rédaction du texte fourni, sans en modifier le sens, les informations ni les nuances.\n\n"
+        "Méthode :\n"
+        "1. Identifie d'abord la structure argumentative du passage : idées principales, idées secondaires, relations logiques, présupposés et nuances.\n"
+        "2. Repère les éléments sémantiques non négociables : concepts, termes techniques, faits historiques, noms propres, dates, références, citations et modalités du jugement.\n"
+        "3. Reconstruis ensuite le passage dans une prose française naturelle, élégante et cohérente.\n\n"
+        "Principes de réécriture :\n"
+        "- Ne procède pas par remplacement mécanique de synonymes.\n"
+        "- Tu peux modifier la structure des phrases, leur rythme, la subordination, la coordination et l'ordre des propositions.\n"
+        "- Tu peux redistribuer les informations entre plusieurs phrases et réorganiser les paragraphes lorsque la cohérence le permet.\n"
+        "- Conserve rigoureusement les distinctions conceptuelles, les degrés de certitude, les relations causales et chronologiques.\n"
+        "- Ne remplace jamais un terme précis par un terme approximatif.\n"
+        "- N'ajoute aucune information et n'invente aucun fait.\n"
+        "- Préserve intégralement les citations et références.\n"
+        "- Préserve la syntaxe Markdown si le texte en contient.\n"
+        "- Évite les tournures artificielles, les synonymes recherchés et les effets stylistiques gratuits.\n\n"
+        "Objectif : produire une rédaction autonome, fidèle à la pensée du texte original, et non une succession de substitutions lexicales.\n\n"
+        "Procède à ton analyse sans l'afficher. Fournis uniquement le texte réécrit, sans commentaire ni justification."
+    ),
     "Style littéraire": "Privilégie une prose française élégante, nuancée, expressive et rythmée, sans emphase ni invention.",
     "Alléger le texte": "Allège les répétitions et les lourdeurs, raccourcis les détours, sans supprimer d'information importante.",
 }
@@ -453,10 +474,13 @@ class RewriteApp(tk.Tk):
         self.tabs.grid(row=1, column=0, sticky="nsew", padx=12, pady=5)
         self.tab_text = ttk.Frame(self.tabs)
         self.tab_file = ttk.Frame(self.tabs)
+        self.tab_compare = ttk.Frame(self.tabs)
         self.tabs.add(self.tab_text, text="Texte libre")
         self.tabs.add(self.tab_file, text="Fichier Markdown")
+        self.tabs.add(self.tab_compare, text="Comparateur")
         self._tab_text()
         self._tab_file()
+        self._tab_compare()
 
         foot = ttk.Frame(self)
         foot.grid(row=2, column=0, sticky="ew", padx=12, pady=(3, 12))
@@ -494,6 +518,8 @@ class RewriteApp(tk.Tk):
         self.rewrite_text_btn = ttk.Button(bar, text="Réécrire le texte", command=self.rewrite_text)
         self.rewrite_text_btn.pack(side="left")
         ttk.Button(bar, text="Copier le résultat", command=self.copy_text).pack(side="left", padx=10)
+        ttk.Button(bar, text="Comparer les textes", command=lambda: self.open_comparator(
+            self.text_input.get("1.0", "end-1c"), self.text_output.get("1.0", "end-1c"))).pack(side="left")
         ttk.Label(bar, text="Tu peux modifier le résultat avant de le copier.").pack(side="right")
 
     def _tab_file(self):
@@ -522,6 +548,125 @@ class RewriteApp(tk.Tk):
         self.rewrite_file_btn = ttk.Button(bottom, text="Réécrire et enregistrer un nouveau .md", command=self.rewrite_file)
         self.rewrite_file_btn.pack(side="left")
         ttk.Button(bottom, text="Enregistrer les modifications du résultat…", command=self.save_preview).pack(side="left", padx=10)
+        ttk.Button(bottom, text="Comparer les textes", command=lambda: self.open_comparator(
+            self.file_input.get("1.0", "end-1c"), self.file_output.get("1.0", "end-1c"))).pack(side="left")
+
+    DIFF_COLORS = {"del": "#ffd6d6", "add": "#d6f5d9", "repl": "#ffe6b3"}
+
+    def _tab_compare(self):
+        self.tab_compare.columnconfigure(0, weight=1)
+        self.tab_compare.rowconfigure(2, weight=1)
+        self.diff_enabled = tk.BooleanVar(value=True)
+        self._diff_guard = False
+
+        stats_bar = ttk.Frame(self.tab_compare)
+        stats_bar.grid(row=0, column=0, sticky="ew", padx=8, pady=(10, 3))
+        self.stats_var = tk.StringVar(value="Colle un texte original et sa réécriture, puis clique sur « Comparer les textes ».")
+        ttk.Label(stats_bar, textvariable=self.stats_var).pack(side="left")
+
+        bar = ttk.Frame(self.tab_compare)
+        bar.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 5))
+        self.compare_btn = ttk.Button(bar, text="Comparer les textes", command=self.run_diff)
+        self.compare_btn.pack(side="left")
+        ttk.Checkbutton(bar, text="Surlignage activé", variable=self.diff_enabled,
+                        command=self._apply_highlight_visibility).pack(side="left", padx=12)
+        ttk.Button(bar, text="Copier le texte réécrit (sans surlignage)",
+                  command=self.copy_compare_rewritten).pack(side="left")
+
+        paned = ttk.Panedwindow(self.tab_compare, orient="horizontal")
+        paned.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        container = ttk.Frame(paned)
+        paned.add(container, weight=1)
+        container.columnconfigure(0, weight=1)
+        container.columnconfigure(1, weight=1)
+        container.rowconfigure(1, weight=1)
+        ttk.Label(container, text="Texte original").grid(row=0, column=0, sticky="w", padx=(10, 0))
+        ttk.Label(container, text="Texte réécrit").grid(row=0, column=1, sticky="w", padx=(10, 0))
+
+        self.compare_original = tk.Text(container, wrap="word", undo=True, font=("Segoe UI", 11),
+                                        padx=10, pady=10, borderwidth=0)
+        self.compare_rewritten = tk.Text(container, wrap="word", undo=True, font=("Segoe UI", 11),
+                                         padx=10, pady=10, borderwidth=0)
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=self._compare_scroll_both)
+        self.compare_original.configure(yscrollcommand=self._make_compare_yscroll(self.compare_rewritten, scrollbar))
+        self.compare_rewritten.configure(yscrollcommand=self._make_compare_yscroll(self.compare_original, scrollbar))
+        self.compare_original.grid(row=1, column=0, sticky="nsew")
+        self.compare_rewritten.grid(row=1, column=1, sticky="nsew")
+        scrollbar.grid(row=1, column=2, sticky="ns")
+
+        for widget in (self.compare_original, self.compare_rewritten):
+            widget.tag_configure("del", background=self.DIFF_COLORS["del"])
+            widget.tag_configure("add", background=self.DIFF_COLORS["add"])
+            widget.tag_configure("repl", background=self.DIFF_COLORS["repl"])
+
+    def _compare_scroll_both(self, *args):
+        self.compare_original.yview(*args)
+        self.compare_rewritten.yview(*args)
+
+    def _make_compare_yscroll(self, other: tk.Text, scrollbar: ttk.Scrollbar):
+        def _set(first, last):
+            scrollbar.set(first, last)
+            if not self._diff_guard:
+                self._diff_guard = True
+                other.yview_moveto(first)
+                self._diff_guard = False
+        return _set
+
+    def open_comparator(self, original: str, rewritten: str):
+        self.compare_original.delete("1.0", "end")
+        self.compare_original.insert("1.0", original)
+        self.compare_rewritten.delete("1.0", "end")
+        self.compare_rewritten.insert("1.0", rewritten)
+        self.tabs.select(self.tab_compare)
+        if original.strip() and rewritten.strip():
+            self.run_diff()
+
+    def run_diff(self):
+        original = self.compare_original.get("1.0", "end-1c")
+        rewritten = self.compare_rewritten.get("1.0", "end-1c")
+        if not original.strip() or not rewritten.strip():
+            messagebox.showwarning("Textes manquants", "Renseigne le texte original et le texte réécrit avant de comparer.")
+            return
+        self.stats_var.set("Comparaison en cours…")
+        self._run(self._diff_worker, original, rewritten)
+
+    def _diff_worker(self, original: str, rewritten: str):
+        ops, stats = compute_diff(original, rewritten)
+        self.jobs.put(("diff_result", (ops, stats)))
+
+    def _render_diff(self, ops: list[DiffOp], stats: DiffStats):
+        left, right = self.compare_original, self.compare_rewritten
+        left.delete("1.0", "end")
+        right.delete("1.0", "end")
+        for op in ops:
+            if op.tag == "equal":
+                left.insert("end", op.original)
+                right.insert("end", op.rewritten)
+            elif op.tag == "delete":
+                left.insert("end", op.original, ("del",))
+            elif op.tag == "insert":
+                right.insert("end", op.rewritten, ("add",))
+            else:  # replace
+                left.insert("end", op.original, ("repl",))
+                right.insert("end", op.rewritten, ("repl",))
+        self._apply_highlight_visibility()
+        self.stats_var.set(
+            f"Mots modifiés : {stats.percent_changed} % — "
+            f"Ajoutés : {stats.words_added} — Supprimés : {stats.words_deleted} — Remplacés : {stats.words_replaced}"
+        )
+
+    def _apply_highlight_visibility(self):
+        active = self.diff_enabled.get()
+        for widget in (self.compare_original, self.compare_rewritten):
+            for tag, color in self.DIFF_COLORS.items():
+                widget.tag_configure(tag, background=color if active else "")
+
+    def copy_compare_rewritten(self):
+        result = self.compare_rewritten.get("1.0", "end-1c")
+        if result:
+            self.clipboard_clear()
+            self.clipboard_append(result)
+            self._status("Texte réécrit copié dans le presse-papiers (sans surlignage).")
 
     def _status(self, text: str):
         self.status.set(text)
@@ -530,7 +675,7 @@ class RewriteApp(tk.Tk):
         self.busy = value
         state = "disabled" if value else "normal"
         for w in (self.refresh_btn, self.pull_btn, self.rewrite_text_btn,
-                  self.rewrite_file_btn, self.browse_btn, self.target_btn):
+                  self.rewrite_file_btn, self.browse_btn, self.target_btn, self.compare_btn):
             w.configure(state=state)
         self.model_combo.configure(state="disabled" if value else "readonly")
         self.cancel_btn.configure(state="normal" if value else "disabled")
@@ -590,6 +735,9 @@ class RewriteApp(tk.Tk):
                 elif kind == "text_finish":
                     self._status("Réécriture terminée. Tu peux relire et copier le résultat.")
                     self.progress.configure(value=100)
+                elif kind == "diff_result":
+                    ops, stats = data
+                    self._render_diff(ops, stats)
                 elif kind == "cancelled":
                     self._status("Opération annulée. Aucun fichier incomplet n'a été enregistré.")
                 elif kind == "error":

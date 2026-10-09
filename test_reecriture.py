@@ -11,6 +11,7 @@ from reecriture_ollama import (
     read_utf8_preserve_newlines, rewrite_markdown_group,
     split_long_piece, structural_signature, unmask_inline,
 )
+from text_diff import compute_diff, tokenize
 
 SAMPLE = """---
 title: Essai de Bossuet
@@ -119,6 +120,76 @@ class TestMarkdown(unittest.TestCase):
                 rewrite_markdown_group("m", [Segment("rewrite", "texte")], [0],
                                        "Style universitaire", "Modérée", ev)
             stream.assert_not_called()
+
+
+class TestTextDiff(unittest.TestCase):
+    def test_tokenize_roundtrip_with_accents_and_apostrophes(self):
+        s = "Qu'il était tôt, aujourd'hui, à Port-Royal !\nDeuxième ligne."
+        self.assertEqual("".join(tokenize(s)), s)
+
+    def test_identical_texts_have_no_changes(self):
+        s = "Le même texte français, avec ponctuation : virgules, points-virgules ; etc."
+        ops, stats = compute_diff(s, s)
+        self.assertTrue(all(op.tag == "equal" for op in ops))
+        self.assertEqual(stats.words_added, 0)
+        self.assertEqual(stats.words_deleted, 0)
+        self.assertEqual(stats.words_replaced, 0)
+        self.assertEqual(stats.percent_changed, 0.0)
+
+    def test_word_replacement_detected(self):
+        original = "Le chat mange une pomme."
+        rewritten = "Le chat mange une poire."
+        ops, stats = compute_diff(original, rewritten)
+        self.assertEqual(stats.words_replaced, 1)
+        self.assertEqual(stats.words_added, 0)
+        self.assertEqual(stats.words_deleted, 0)
+        tags = {op.tag for op in ops}
+        self.assertIn("replace", tags)
+        reconstructed_original = "".join(op.original for op in ops)
+        reconstructed_rewritten = "".join(op.rewritten for op in ops)
+        self.assertEqual(reconstructed_original, original)
+        self.assertEqual(reconstructed_rewritten, rewritten)
+
+    def test_word_addition_and_deletion(self):
+        original = "Un texte court."
+        rewritten = "Un très long texte court et détaillé."
+        ops, stats = compute_diff(original, rewritten)
+        self.assertGreater(stats.words_added, 0)
+
+        original = "Un texte vraiment très long et détaillé."
+        rewritten = "Un texte court."
+        ops, stats = compute_diff(original, rewritten)
+        self.assertGreater(stats.words_deleted + stats.words_replaced, 0)
+
+    def test_accented_words_not_flagged_when_unchanged(self):
+        original = "L'étude décrit l'évènement avec précision et élégance."
+        rewritten = "L'étude décrit l'évènement avec précision, puis élégance."
+        ops, stats = compute_diff(original, rewritten)
+        self.assertLess(stats.percent_changed, 50.0)
+        # La ponctuation ajoutée seule ne doit pas être comptée comme un mot.
+        self.assertEqual(stats.words_added, 0)
+
+    def test_paragraphs_and_markdown_syntax_preserved(self):
+        original = "# Titre\n\nPremier paragraphe.\n\nDeuxième **paragraphe** avec [lien](https://ex.fr).\n"
+        rewritten = "# Titre revu\n\nPremier paragraphe.\n\nDeuxième **paragraphe** modifié avec [lien](https://ex.fr).\n"
+        ops, stats = compute_diff(original, rewritten)
+        reconstructed_original = "".join(op.original for op in ops)
+        reconstructed_rewritten = "".join(op.rewritten for op in ops)
+        self.assertEqual(reconstructed_original, original)
+        self.assertEqual(reconstructed_rewritten, rewritten)
+        self.assertGreater(stats.words_added, 0)
+        # Les marqueurs Markdown eux-mêmes ne sont jamais altérés par la comparaison.
+        self.assertIn("**paragraphe**", reconstructed_rewritten)
+        self.assertIn("[lien](https://ex.fr)", reconstructed_rewritten)
+
+    def test_moved_identical_sentence_not_fully_flagged(self):
+        original = "Phrase A. Phrase B. Phrase C."
+        rewritten = "Phrase C. Phrase A. Phrase B."
+        ops, stats = compute_diff(original, rewritten)
+        # Les blocs communs doivent rester marqués "equal" même déplacés.
+        equal_text = "".join(op.original for op in ops if op.tag == "equal")
+        self.assertIn("Phrase A", equal_text)
+        self.assertIn("Phrase B", equal_text)
 
 
 if __name__ == "__main__":
